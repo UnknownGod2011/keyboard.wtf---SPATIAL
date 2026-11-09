@@ -10,14 +10,14 @@
 
 ## Description draft
 
-SPATIAL places a Windows workspace in the room. Its companion captures a chosen region on the PC. A Jarvis turn routes to the existing Windows assistant after review, and a Cursivis action works on text the user explicitly copies. A settings panel shows what the companion has enabled.
+SPATIAL places a live Windows workspace in the room. The companion shares the desktop or a chosen region. Review a Jarvis turn before sending it to the existing Windows assistant, or copy text or pinch-drag a screen region and see Cursivis suggestions and results beside the desktop. Settings shows connection and opt-in status. The [README](README.md) links to the public Windows installers and explains pairing and provider setup.
 
 Use the final Preview and Windows evidence to decide which features belong in the submitted description.
 
 ## Pre-existing work and attribution
 
 - Keyboard.wtf is a separately installed Windows application. It supplies Jarvis, its existing provider configuration, action execution and permissions.
-- Cursivis is a separate existing application. Its local backend supplies contextual suggestions and AI text analysis.
+- Cursivis is a separate existing application. Its local backend supplies contextual suggestions and AI analysis for selected text and images.
 - Snap supplied the SPECS Base Template, Lens Studio asset presets, Spectacles Interaction Kit and Spectacles UI Kit. The Devpost Learn skill pack supplies the design-brief format.
 - New work consists of the Spatial Lens workflow, the Windows companion, and their integration and tests. Private application code and user credentials stay outside the public repository.
 

@@ -37,6 +37,7 @@ recordings/
 BackUp/
 *.esproj.*.lock
 __pycache__/
+.venv/
 .virtual-scene.json
 
 # BEGIN Lens Studio managed Agents-Docs block
