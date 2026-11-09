@@ -13,6 +13,9 @@ export type Selection = {
   excerpt: string
 }
 
+export type SelectionAttempt = Selection | {snipTicket: string}
+export type SnipResult = Selection | {pending: true}
+
 export class SpatialBridge {
   private internet = require("LensStudio:InternetModule") as InternetModule
 

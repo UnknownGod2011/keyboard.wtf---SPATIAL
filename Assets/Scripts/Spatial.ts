@@ -4,7 +4,7 @@ import { Button } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Button"
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton"
 import { ElementContent } from "SpectaclesUIKit.lspkg/Scripts/Components/Content/ElementContent"
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField"
-import { CompanionStatus, DesktopFrame, Selection, SpatialBridge } from "./SpatialBridge"
+import { CompanionStatus, DesktopFrame, Selection, SelectionAttempt, SnipResult, SpatialBridge } from "./SpatialBridge"
 
 type Mode = "desktop" | "context" | "jarvis" | "settings"
 type Voice = "ready" | "listening" | "review" | "sending" | "sent"
@@ -16,6 +16,7 @@ const SCREEN_HEIGHT = 23
 const INK = new vec4(0.88, 0.98, 1, 1)
 const CYAN = new vec4(0.38, 0.92, 1, 1)
 const DISPLAY_MATERIAL = requireAsset("../Spatial Display.mat") as Material
+const ORB_TEXTURE = requireAsset("../Jarvis Orb.png") as Texture
 
 @component
 export class Spatial extends BaseScriptComponent {
@@ -40,6 +41,8 @@ export class Spatial extends BaseScriptComponent {
   private orb!: SceneObject
   private controls!: SceneObject
   private entry!: TextInputField
+  private snipPoll!: DelayedCallbackEvent
+  private snipTicket = ""
   private mode: Mode = "desktop"
   private voice: Voice = "ready"
   private status: CompanionStatus | null = null
@@ -98,7 +101,16 @@ export class Spatial extends BaseScriptComponent {
     this.entry.getSceneObject().enabled = false
 
     this.button(this.host, "Cursivis", -19, -17, 12, () => this.capture())
-    this.orb = this.button(this.host, "Jarvis", -7, -17, 7, () => this.listen(), true)
+    const jarvisButton = this.button(this.host, "Jarvis", -7, -17, 7, () => this.listen(), true)
+    this.orb = this.object("Jarvis glow", jarvisButton, 0, 0, 0.7)
+    const orbImage = this.orb.createComponent("Component.Image") as Image
+    const orbMaterial = DISPLAY_MATERIAL.clone()
+    orbMaterial.mainPass.baseTex = ORB_TEXTURE
+    orbMaterial.mainPass.depthWrite = false
+    orbImage.clearMaterials()
+    orbImage.addMaterial(orbMaterial)
+    this.snipPoll = this.createEvent("DelayedCallbackEvent")
+    this.snipPoll.bind(() => this.finishSnip())
     this.button(this.host, "Settings", 3, -17, 11, () => this.settings())
     this.button(this.host, "−", 12, -17, 5, () => this.resize(-0.1))
     this.button(this.host, "+", 18, -17, 5, () => this.resize(0.1))
@@ -161,7 +173,9 @@ export class Spatial extends BaseScriptComponent {
     const now = getTime()
     const pulse = this.voice === "listening" || this.voice === "sending" ? 0.055 : 0.022
     const glow = 1 + Math.sin(now * (this.voice === "listening" ? 6 : 3)) * pulse
-    this.orb.getTransform().setLocalScale(new vec3(glow, glow, 1))
+    const orbTransform = this.orb.getTransform()
+    orbTransform.setLocalScale(new vec3(7.6 * glow, 7.6 * glow, 1))
+    orbTransform.setLocalPosition(new vec3(0, 0.35 * Math.sin(now * 2), 0.7))
     if (!this.screenBusy && now - this.lastPoll > 0.5 && this.showsMirror()) {
       this.lastPoll = now
       this.poll()
@@ -263,6 +277,7 @@ export class Spatial extends BaseScriptComponent {
     this.epoch++
     this.pending = false
     this.selection = null
+    this.snipTicket = ""
     this.voice = "ready"
     this.stopListening()
     this.entry.text = ""
@@ -279,29 +294,71 @@ export class Spatial extends BaseScriptComponent {
     this.showDesktop()
   }
 
-  private async capture(): Promise<void> {
+  private async capture(forceSnip = false): Promise<void> {
     this.reset()
     const epoch = this.epoch
-    this.panel("context", "CURSIVIS", "Reading the text you copied on Windows…")
+    this.panel("context", "CURSIVIS", forceSnip ? "Opening Snipping Tool…" : "Checking for newly copied text…")
     try {
-      const selection = await this.bridge.request<Selection>("/selection", {})
+      const result = await this.bridge.request<SelectionAttempt>(forceSnip ? "/snip" : "/selection", {})
       if (epoch !== this.epoch) return
-      this.selection = selection
-      this.panel("context", "CURSIVIS  /  FINDING ACTIONS", selection.excerpt)
-      const ranked = await this.bridge.request<{actions: string[]}>("/suggest", {revision: selection.revision})
-      if (epoch === this.epoch && this.selection === selection && !this.pending) this.suggestions(selection, ranked.actions)
-    } catch (error) {
-      if (epoch === this.epoch) {
-        this.panel("context", "CURSIVIS", String(error))
-        this.button(this.controls, "Retry", 0, -11, 12, () => this.capture())
+      if ("snipTicket" in result) {
+        this.snipTicket = result.snipTicket
+        this.panel("context", "CURSIVIS  /  SCREEN SNIP", "On Windows, select New in Snipping Tool and drag around the image. Copy the snip if Windows does not copy it automatically.")
+        this.snipPoll.reset(0.8)
+      } else {
+        await this.requestSuggestions(result, epoch)
       }
+    } catch (error) {
+      if (epoch === this.epoch) this.selectionError(error)
     }
   }
 
+  private async finishSnip(): Promise<void> {
+    const ticket = this.snipTicket
+    if (!ticket) return
+    const epoch = this.epoch
+    try {
+      const result = await this.bridge.request<SnipResult>("/snip/result", {ticket})
+      if (epoch !== this.epoch) return
+      if ("pending" in result) {
+        this.snipPoll.reset(0.8)
+      } else {
+        this.snipTicket = ""
+        await this.requestSuggestions(result, epoch)
+      }
+    } catch (error) {
+      if (epoch === this.epoch) this.selectionError(error)
+    }
+  }
+
+  private async requestSuggestions(selection: Selection, epoch: number): Promise<void> {
+    this.selection = selection
+    this.panel("context", "CURSIVIS  /  FINDING ACTIONS", selection.excerpt)
+    const ranked = await this.bridge.request<{actions: string[]}>("/suggest", {revision: selection.revision})
+    if (epoch === this.epoch && this.selection === selection) this.suggestions(selection, ranked.actions)
+  }
+
+  private selectionError(error: unknown): void {
+    this.snipTicket = ""
+    this.panel("context", "CURSIVIS", String(error))
+    this.button(this.controls, "Retry", -8, -11, 13, () => {
+      if (!this.selection) {
+        this.capture()
+        return
+      }
+      const epoch = this.epoch
+      this.requestSuggestions(this.selection, epoch).catch(reason => {
+        if (epoch === this.epoch) this.selectionError(reason)
+      })
+    })
+    this.button(this.controls, "Snip screen", 9, -11, 17, () => this.capture(true))
+  }
+
   private suggestions(selection: Selection, actions: string[]): void {
-    this.panel("context", "CURSIVIS  /  " + selection.characters + " CHARS", selection.excerpt)
-    this.message.layoutRect = Rect.create(-24.5, 24.5, -5, 5)
-    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(0, 5.5, 0.24))
+    this.panel("context", selection.characters ? "CURSIVIS  /  " + selection.characters + " CHARS" : "CURSIVIS  /  IMAGE", selection.excerpt)
+    this.message.layoutRect = Rect.create(-16, 16, -5, 5)
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(-7, 5.5, 0.24))
+    this.button(this.controls, "Snip screen", 17, 7, 16, () => this.capture(true))
     actions.forEach((action, index) => {
       const name = action[0].toUpperCase() + action.slice(1).replace(/_/g, " ")
       this.button(this.controls, name, 0, -2 - index * 5.4, 30, () => this.analyze(action))
@@ -360,8 +417,13 @@ export class Spatial extends BaseScriptComponent {
           this.review(event.text.trim(), "voice")
         }
       })
-      options.onTranscriptionErrorEvent.add(() => {
-        if (epoch === this.epoch && this.voice === "listening") this.review("", "typed")
+      options.onTranscriptionErrorEvent.add(code => {
+        if (epoch !== this.epoch || this.voice !== "listening") return
+        print("SPATIAL ASR status " + code)
+        const message = code === AsrModule.AsrStatusCode.Unauthenticated
+          ? "SPECS voice needs a successful sign-in. Type here or speak to Jarvis directly on Windows."
+          : "SPECS voice is unavailable. Type here or speak to Jarvis directly on Windows."
+        this.review("", "typed", message)
       })
       this.asr.startTranscribing(options)
       const timeout = this.createEvent("DelayedCallbackEvent")
@@ -379,11 +441,11 @@ export class Spatial extends BaseScriptComponent {
     this.asr = null
   }
 
-  private review(text: string, input: string): void {
+  private review(text: string, input: string, message = "Pinch Send when your command is ready."): void {
     this.voice = "review"
     this.stopListening()
     this.inputMode = input
-    this.panel("jarvis", "JARVIS  /  REVIEW", "Pinch Send when your command is ready.")
+    this.panel("jarvis", "JARVIS  /  REVIEW", message)
     this.message.getSceneObject().getTransform().setLocalPosition(new vec3(14, -4, 0.24))
     this.entry.text = text
     this.entry.getSceneObject().enabled = true

@@ -14,10 +14,14 @@ from spatial import BridgeError, Handler, Spatial, ThreadingHTTPServer, local_re
 
 class CompanionTests(unittest.TestCase):
     def setUp(self):
+        sequence = patch("spatial.clipboard_sequence", return_value=10)
+        self.clipboard_sequence = sequence.start()
+        self.addCleanup(sequence.stop)
         self.app = Spatial(argparse.Namespace(
             share=None, desktop=False, context=True, jarvis=True, microphone=False,
             token="test-only", cursivis_port=51880, jarvis_port=8090,
         ))
+        self.clipboard_sequence.return_value = 11
 
     def test_capture_is_opt_in_and_jpeg_contains_captured_pixels(self):
         with self.assertRaisesRegex(BridgeError, "Start the companion"):
@@ -61,6 +65,7 @@ class CompanionTests(unittest.TestCase):
         ]
         for selected, recommended, alternative in cases:
             with self.subTest(recommended=recommended):
+                self.clipboard_sequence.return_value += 1
                 with patch("spatial.clipboard_text", return_value=selected):
                     selection = self.app.read_selection()
                 offer = json.dumps({
@@ -76,6 +81,30 @@ class CompanionTests(unittest.TestCase):
                 with patch("spatial.local_request", return_value=b'{"result":"A real provider result would appear here."}') as upstream:
                     self.app.context({**selection, "action": recommended}, suggestions=False)
                 self.assertEqual(upstream.call_args.args[2]["actionHint"], recommended)
+
+    def test_unchanged_clipboard_opens_snipping_tool_and_accepts_a_fresh_image(self):
+        self.clipboard_sequence.return_value = 10
+        with patch("spatial.launch_snipping_tool") as launch, patch("spatial.clipboard_text") as read_text:
+            ticket = self.app.read_selection()["snipTicket"]
+        launch.assert_called_once_with()
+        read_text.assert_not_called()
+        with patch("spatial.ImageGrab.grabclipboard") as read_image:
+            self.assertEqual(self.app.read_snip(ticket), {"pending": True})
+        read_image.assert_not_called()
+
+        self.clipboard_sequence.return_value = 12
+        with patch("spatial.ImageGrab.grabclipboard", return_value=Image.new("RGB", (80, 40), (20, 110, 200))):
+            selection = self.app.read_snip(ticket)
+        with self.assertRaisesRegex(BridgeError, "expired"):
+            self.app.read_snip(ticket)
+        response = b'{"recommendedAction":"ocr_extract_text","alternatives":["execute","describe_image","summarize"]}'
+        with patch("spatial.local_request", return_value=response) as upstream:
+            offered = self.app.context(selection, suggestions=True)
+        self.assertEqual(offered["actions"], ("ocr_extract_text", "describe_image"))
+        image = upstream.call_args.args[2]["selection"]
+        self.assertEqual((image["kind"], image["imageMimeType"]), ("image", "image/jpeg"))
+        with Image.open(io.BytesIO(base64.b64decode(image["imageBase64"]))) as decoded:
+            self.assertEqual(decoded.size, (80, 40))
 
     def test_jarvis_requires_confirmation_and_preserves_upstream_token(self):
         with patch("spatial.local_request") as upstream:

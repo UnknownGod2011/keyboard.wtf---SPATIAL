@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import ctypes
 import hmac
 import io
 import json
@@ -13,11 +14,12 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import error as url_error, request
 
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
 
 
 # These Cursivis text actions return content without executing Windows actions.
@@ -27,6 +29,10 @@ TEXT_ACTIONS = frozenset({
     "optimize_code", "optimize_prompt", "polish_email", "rewrite", "rewrite_structured",
     "suggest_captions", "summarize", "translate",
 })
+IMAGE_ACTIONS = frozenset({
+    "describe_image", "extract_dominant_colors", "extract_key_details", "extract_table_data",
+    "generate_captions", "identify_objects", "ocr_extract_text",
+})
 CLIP_LIMIT = 20_000
 CONFIG = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "keyboard.wtf SPATIAL" / "bridge.local.json"
 
@@ -35,6 +41,27 @@ class BridgeError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+@dataclass(frozen=True)
+class SelectionSnapshot:
+    revision: str
+    selection: dict
+    expires: float
+    actions: tuple = ()
+
+
+def clipboard_sequence():
+    return ctypes.windll.user32.GetClipboardSequenceNumber()
+
+
+def launch_snipping_tool():
+    try:
+        # Open the installed app. The unpackaged bridge takes the result from
+        # the clipboard after the user chooses New and makes a snip.
+        os.startfile("SnippingTool.exe")
+    except OSError as error:
+        raise BridgeError("Could not open Windows Snipping Tool.", 502) from error
 
 
 def local_request(port, path, data=None, headers=None, timeout=20):
@@ -72,6 +99,8 @@ class Spatial:
         self.options = options
         self.lock = threading.Lock()
         self.snapshot = None
+        self.snip_job = None
+        self.clipboard_baseline = clipboard_sequence() if options.context else 0
         self.last_frame = 0
 
     def status(self):
@@ -105,25 +134,83 @@ class Spatial:
     def read_selection(self):
         if not self.options.context:
             raise BridgeError("Enable contextual actions on Windows.", 403)
-        text = clipboard_text()
+        sequence = clipboard_sequence()
         with self.lock:
+            fresh = sequence != self.clipboard_baseline
+        if not fresh:
+            return self.start_snip()
+        try:
+            text = clipboard_text()
+        except BridgeError:
+            return self.start_snip()
+        if clipboard_sequence() != sequence:
+            raise BridgeError("The clipboard changed during capture. Try again.", 409)
+        return self.store_selection({"kind": "text", "text": text}, sequence, text[:135])
+
+    def store_selection(self, selection, sequence, excerpt):
+        revision = secrets.token_urlsafe(18)
+        with self.lock:
+            self.snapshot = SelectionSnapshot(revision, selection, time.monotonic() + 120)
+            self.clipboard_baseline = sequence
+            self.snip_job = None
+        return {"revision": revision, "characters": len(selection.get("text", "")), "excerpt": excerpt}
+
+    def start_snip(self):
+        if not self.options.context:
+            raise BridgeError("Enable contextual actions on Windows.", 403)
+        job = (secrets.token_urlsafe(18), clipboard_sequence(), time.monotonic() + 60)
+        launch_snipping_tool()
+        with self.lock:
+            self.snapshot = None
+            self.snip_job = job
+        return {"snipTicket": job[0]}
+
+    def read_snip(self, ticket):
+        if not self.options.context:
+            raise BridgeError("Enable contextual actions on Windows.", 403)
+        with self.lock:
+            job = self.snip_job
+        if job is None or job[0] != ticket or job[2] < time.monotonic():
+            raise BridgeError("The snip request expired. Open Snipping Tool again.", 409)
+        sequence = clipboard_sequence()
+        if sequence == job[1]:
+            return {"pending": True}
+        try:
+            image = ImageGrab.grabclipboard()
+        except OSError:
+            return {"pending": True}
+        if not isinstance(image, Image.Image) or clipboard_sequence() != sequence:
+            return {"pending": True}
+        image.thumbnail((1280, 960))
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, format="JPEG", quality=78)
+        selection = {
+            "kind": "image",
+            "imageBase64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "imageMimeType": "image/jpeg",
+        }
+        with self.lock:
+            if self.snip_job is not job:
+                raise BridgeError("The snip request changed. Start a new snip.", 409)
             revision = secrets.token_urlsafe(18)
-            self.snapshot = (revision, text, time.monotonic() + 120, ())
-        return {"revision": revision, "characters": len(text), "excerpt": text[:135]}
+            self.snapshot = SelectionSnapshot(revision, selection, time.monotonic() + 120)
+            self.clipboard_baseline = sequence
+            self.snip_job = None
+        return {"revision": revision, "characters": 0, "excerpt": "Windows snip captured"}
 
     def context(self, payload, suggestions):
         if not self.options.context:
             raise BridgeError("Enable contextual actions on Windows.", 403)
         with self.lock:
             current = self.snapshot
-        if current is None or current[0] != payload.get("revision") or current[2] < time.monotonic():
+        if current is None or current.revision != payload.get("revision") or current.expires < time.monotonic():
             raise BridgeError("Capture the selection again.", 409)
         action = payload.get("action")
-        if not suggestions and action not in current[3]:
+        if not suggestions and action not in current.actions:
             raise BridgeError("Choose one of the actions offered for this selection.")
         data = {
             "protocolVersion": "1.0.0", "requestId": str(uuid.uuid4()), "mode": "guided",
-            "selection": {"kind": "text", "text": current[1]},
+            "selection": current.selection,
             "context": {"cursorX": 0, "cursorY": 0},
             "timestampUtc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
@@ -144,15 +231,16 @@ class Spatial:
                 values = result.get(key)
                 if isinstance(values, list):
                     ranked.extend(values)
+            allowed = IMAGE_ACTIONS if current.selection["kind"] == "image" else TEXT_ACTIONS
             actions = tuple(dict.fromkeys(
-                item for item in ranked if isinstance(item, str) and item in TEXT_ACTIONS
+                item for item in ranked if isinstance(item, str) and item in allowed
             ))[:3]
             if not actions:
                 raise BridgeError("Cursivis offered no supported actions for this selection.", 502)
             with self.lock:
-                if self.snapshot is not current or current[2] < time.monotonic():
+                if self.snapshot is not current or current.expires < time.monotonic():
                     raise BridgeError("Capture the selection again.", 409)
-                self.snapshot = (*current[:3], actions)
+                self.snapshot = SelectionSnapshot(current.revision, current.selection, current.expires, actions)
             return {"actions": actions}
         answer = result.get("result")
         if not isinstance(answer, str) or not answer.strip():
@@ -238,6 +326,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise BridgeError("A JSON object is required.")
             if self.path == "/selection":
                 return app.read_selection()
+            if self.path == "/snip":
+                return app.start_snip()
+            if self.path == "/snip/result":
+                return app.read_snip(payload.get("ticket"))
             if self.path == "/suggest":
                 return app.context(payload, suggestions=True)
             if self.path == "/analyze":
@@ -247,6 +339,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/clear":
                 with app.lock:
                     app.snapshot = None
+                    app.snip_job = None
                 return {"cleared": True}
         raise BridgeError("Unknown companion route.", 404)
 
