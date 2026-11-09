@@ -6,6 +6,7 @@ import ctypes
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -13,6 +14,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -55,15 +57,6 @@ def clipboard_sequence():
     return ctypes.windll.user32.GetClipboardSequenceNumber()
 
 
-def launch_snipping_tool():
-    try:
-        # Open the installed app. The unpackaged bridge takes the result from
-        # the clipboard after the user chooses New and makes a snip.
-        os.startfile("SnippingTool.exe")
-    except OSError as error:
-        raise BridgeError("Could not open Windows Snipping Tool.", 502) from error
-
-
 def local_request(port, path, data=None, headers=None, timeout=20):
     endpoint = f"http://localhost:{port}{path}"
     head = dict(headers or {})
@@ -99,7 +92,7 @@ class Spatial:
         self.options = options
         self.lock = threading.Lock()
         self.snapshot = None
-        self.snip_job = None
+        self.frames = deque(maxlen=4)
         self.clipboard_baseline = clipboard_sequence() if options.context else 0
         self.last_frame = 0
 
@@ -125,10 +118,15 @@ class Spatial:
         frame.thumbnail((960, 540))
         buffer = io.BytesIO()
         frame.save(buffer, format="JPEG", quality=72)
+        jpeg = buffer.getvalue()
+        sequence = time.monotonic_ns() // 1_000_000
+        if self.options.context:
+            with self.lock:
+                self.frames.append((sequence, time.monotonic() + 60, jpeg))
         return {
             "width": frame.width, "height": frame.height,
-            "sequence": time.monotonic_ns() // 1_000_000,
-            "jpeg": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "sequence": sequence,
+            "jpeg": base64.b64encode(jpeg).decode("ascii"),
         }
 
     def read_selection(self):
@@ -138,11 +136,11 @@ class Spatial:
         with self.lock:
             fresh = sequence != self.clipboard_baseline
         if not fresh:
-            return self.start_snip()
+            return {"needsRegion": True}
         try:
             text = clipboard_text()
         except BridgeError:
-            return self.start_snip()
+            return {"needsRegion": True}
         if clipboard_sequence() != sequence:
             raise BridgeError("The clipboard changed during capture. Try again.", 409)
         return self.store_selection({"kind": "text", "text": text}, sequence, text[:135])
@@ -151,52 +149,38 @@ class Spatial:
         revision = secrets.token_urlsafe(18)
         with self.lock:
             self.snapshot = SelectionSnapshot(revision, selection, time.monotonic() + 120)
-            self.clipboard_baseline = sequence
-            self.snip_job = None
+            if sequence is not None:
+                self.clipboard_baseline = sequence
         return {"revision": revision, "characters": len(selection.get("text", "")), "excerpt": excerpt}
 
-    def start_snip(self):
+    def capture_region(self, payload):
         if not self.options.context:
             raise BridgeError("Enable contextual actions on Windows.", 403)
-        job = (secrets.token_urlsafe(18), clipboard_sequence(), time.monotonic() + 60)
-        launch_snipping_tool()
+        bounds = [payload.get(key) for key in ("left", "top", "right", "bottom")]
+        if any(type(value) not in (float, int) or not 0 <= value <= 1 for value in bounds):
+            raise BridgeError("Select a rectangle within the mirrored desktop.")
+        left, top, right, bottom = bounds
+        sequence = payload.get("sequence")
+        if type(sequence) is not int:
+            raise BridgeError("Select a region on a live desktop frame.")
         with self.lock:
-            self.snapshot = None
-            self.snip_job = job
-        return {"snipTicket": job[0]}
-
-    def read_snip(self, ticket):
-        if not self.options.context:
-            raise BridgeError("Enable contextual actions on Windows.", 403)
-        with self.lock:
-            job = self.snip_job
-        if job is None or job[0] != ticket or job[2] < time.monotonic():
-            raise BridgeError("The snip request expired. Open Snipping Tool again.", 409)
-        sequence = clipboard_sequence()
-        if sequence == job[1]:
-            return {"pending": True}
-        try:
-            image = ImageGrab.grabclipboard()
-        except OSError:
-            return {"pending": True}
-        if not isinstance(image, Image.Image) or clipboard_sequence() != sequence:
-            return {"pending": True}
-        image.thumbnail((1280, 960))
+            now = time.monotonic()
+            frame = next((jpeg for ident, expires, jpeg in self.frames if ident == sequence and expires > now), None)
+        if frame is None:
+            raise BridgeError("This frame expired. Draw the region again on the live desktop.", 409)
         buffer = io.BytesIO()
-        image.convert("RGB").save(buffer, format="JPEG", quality=78)
+        with Image.open(io.BytesIO(frame)) as image:
+            if (right - left) * image.width < 8 or (bottom - top) * image.height < 8:
+                raise BridgeError("Draw a larger rectangle on the desktop.")
+            box = (math.floor(left * image.width), math.floor(top * image.height),
+                   math.ceil(right * image.width), math.ceil(bottom * image.height))
+            image.crop(box).save(buffer, format="PNG")
         selection = {
             "kind": "image",
             "imageBase64": base64.b64encode(buffer.getvalue()).decode("ascii"),
-            "imageMimeType": "image/jpeg",
+            "imageMimeType": "image/png",
         }
-        with self.lock:
-            if self.snip_job is not job:
-                raise BridgeError("The snip request changed. Start a new snip.", 409)
-            revision = secrets.token_urlsafe(18)
-            self.snapshot = SelectionSnapshot(revision, selection, time.monotonic() + 120)
-            self.clipboard_baseline = sequence
-            self.snip_job = None
-        return {"revision": revision, "characters": 0, "excerpt": "Windows snip captured"}
+        return self.store_selection(selection, None, "Desktop region captured")
 
     def context(self, payload, suggestions):
         if not self.options.context:
@@ -218,7 +202,15 @@ class Spatial:
             data["actionHint"] = action
         try:
             path = "/suggest-actions" if suggestions else "/analyze"
-            result = json.loads(local_request(self.options.cursivis_port, path, data, timeout=65))
+            try:
+                raw = local_request(self.options.cursivis_port, path, data, timeout=65)
+            except url_error.HTTPError as error:
+                if error.code != 503 or error.headers and error.headers.get("Retry-After"):
+                    raise
+                error.close()
+                time.sleep(1)
+                raw = local_request(self.options.cursivis_port, path, data, timeout=65)
+            result = json.loads(raw)
         except url_error.HTTPError as error:
             if error.code in (429, 503):
                 raise BridgeError("Cursivis provider is busy. Try the action again shortly.", 503) from error
@@ -326,10 +318,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise BridgeError("A JSON object is required.")
             if self.path == "/selection":
                 return app.read_selection()
-            if self.path == "/snip":
-                return app.start_snip()
-            if self.path == "/snip/result":
-                return app.read_snip(payload.get("ticket"))
+            if self.path == "/region":
+                return app.capture_region(payload)
             if self.path == "/suggest":
                 return app.context(payload, suggestions=True)
             if self.path == "/analyze":
@@ -339,7 +329,6 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/clear":
                 with app.lock:
                     app.snapshot = None
-                    app.snip_job = None
                 return {"cleared": True}
         raise BridgeError("Unknown companion route.", 404)
 
@@ -350,7 +339,7 @@ def main():
     capture = parser.add_mutually_exclusive_group()
     capture.add_argument("--desktop", action="store_true", help="Share the entire Windows desktop across displays")
     capture.add_argument("--share", nargs=4, type=int, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
-    parser.add_argument("--context", action="store_true", help="Allow explicit clipboard capture and Cursivis analysis")
+    parser.add_argument("--context", action="store_true", help="Allow explicit text and desktop region capture for Cursivis")
     parser.add_argument("--jarvis", action="store_true", help="Allow confirmed turns to Keyboard.wtf")
     parser.add_argument("--microphone", action="store_true", help="Allow SPECS ASR during Jarvis turns")
     parser.add_argument("--jarvis-port", type=int, default=8090)

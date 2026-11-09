@@ -15,8 +15,8 @@ Keyboard.wtf and Cursivis are separately installed. The companion defaults to th
 ### Controls
 
 - Drag the frame rail to reposition. Use **−** and **+** for size.
-- Copy a text selection in Windows, then pinch **Cursivis**. If you have no fresh copied text, Cursivis opens Windows Snipping Tool. You can also choose **Snip screen** from the suggestions popup. In Snipping Tool, select **New**, drag over the region and copy the snip if automatic copying is disabled. The popup waits for the fresh image for up to 60 seconds.
-- Choose a suggested action to see the result in the popup. The installed Cursivis backend uses its configured Gemini provider to rank actions for the shared text or image and run the one you choose. The Lens and companion do not need a copy of the Gemini key.
+- Copy a text selection in Windows, then pinch **Cursivis**. With no fresh copied text, the Lens freezes the visible desktop for a snip. Pinch and drag a rectangle on the desktop, then release. The companion passes only that crop to Cursivis and the desktop resumes live updates. **×** cancels and **Snip screen** starts another selection.
+- Choose a suggested action to see the result beside the desktop. The installed Cursivis backend uses its configured Gemini provider to rank actions for the shared text or image and run the one you choose. If the provider stays busy, **Retry** reuses the selection while it is still available. The Lens and companion do not need a copy of the Gemini key.
 - Pinch the floating **Jarvis** orb to open its popup beside the live desktop. Speak or type a turn and review it before pressing **Send**. If SPECS transcription cannot sign in, use the typed field or speak to the installed Windows Jarvis directly. Keyboard.wtf handles voice replies and Windows actions through its existing assistant. **Talk again** opens another turn.
 - **Settings** shows connection, streaming and permission status. **×** closes the current workflow or exits the workspace.
 

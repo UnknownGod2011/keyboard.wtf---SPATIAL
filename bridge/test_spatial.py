@@ -82,29 +82,38 @@ class CompanionTests(unittest.TestCase):
                     self.app.context({**selection, "action": recommended}, suggestions=False)
                 self.assertEqual(upstream.call_args.args[2]["actionHint"], recommended)
 
-    def test_unchanged_clipboard_opens_snipping_tool_and_accepts_a_fresh_image(self):
+    def test_unchanged_clipboard_uses_region_from_the_exact_displayed_frame(self):
         self.clipboard_sequence.return_value = 10
-        with patch("spatial.launch_snipping_tool") as launch, patch("spatial.clipboard_text") as read_text:
-            ticket = self.app.read_selection()["snipTicket"]
-        launch.assert_called_once_with()
+        with patch("spatial.clipboard_text") as read_text:
+            self.assertEqual(self.app.read_selection(), {"needsRegion": True})
         read_text.assert_not_called()
-        with patch("spatial.ImageGrab.grabclipboard") as read_image:
-            self.assertEqual(self.app.read_snip(ticket), {"pending": True})
-        read_image.assert_not_called()
 
-        self.clipboard_sequence.return_value = 12
-        with patch("spatial.ImageGrab.grabclipboard", return_value=Image.new("RGB", (80, 40), (20, 110, 200))):
-            selection = self.app.read_snip(ticket)
+        self.app.options.desktop = True
+        original = Image.new("RGB", (80, 40), (20, 110, 200))
+        original.paste((200, 40, 20), (0, 0, 40, 40))
+        with patch("spatial.ImageGrab.grab", side_effect=[original, Image.new("RGB", (80, 40))]) as grab, \
+                patch("spatial.time.monotonic_ns", side_effect=[1_000_000, 2_000_000]):
+            frame = self.app.capture()
+            self.app.last_frame = 0
+            self.app.capture()
+            bounds = {"left": 0.625, "top": 0.25, "right": 0.875, "bottom": 0.75}
+            selection = self.app.capture_region({**bounds, "sequence": frame["sequence"]})
+        self.assertEqual(grab.call_count, 2)
         with self.assertRaisesRegex(BridgeError, "expired"):
-            self.app.read_snip(ticket)
+            self.app.capture_region({**bounds, "sequence": frame["sequence"] - 100})
+        with self.assertRaisesRegex(BridgeError, "within the mirrored"):
+            self.app.capture_region({**bounds, "sequence": frame["sequence"], "left": -0.01})
         response = b'{"recommendedAction":"ocr_extract_text","alternatives":["execute","describe_image","summarize"]}'
-        with patch("spatial.local_request", return_value=response) as upstream:
+        busy = HTTPError("http://localhost", 503, "busy", {}, None)
+        with patch("spatial.local_request", side_effect=[busy, response]) as upstream, patch("spatial.time.sleep"):
             offered = self.app.context(selection, suggestions=True)
+        self.assertEqual(upstream.call_count, 2)
         self.assertEqual(offered["actions"], ("ocr_extract_text", "describe_image"))
         image = upstream.call_args.args[2]["selection"]
-        self.assertEqual((image["kind"], image["imageMimeType"]), ("image", "image/jpeg"))
+        self.assertEqual((image["kind"], image["imageMimeType"]), ("image", "image/png"))
         with Image.open(io.BytesIO(base64.b64decode(image["imageBase64"]))) as decoded:
-            self.assertEqual(decoded.size, (80, 40))
+            self.assertEqual(decoded.size, (20, 20))
+            self.assertTrue(all(abs(got - want) <= 4 for got, want in zip(decoded.getpixel((10, 10)), (20, 110, 200))))
 
     def test_jarvis_requires_confirmation_and_preserves_upstream_token(self):
         with patch("spatial.local_request") as upstream:

@@ -5,7 +5,7 @@ export type CompanionStatus = {
   microphone: boolean
 }
 
-export type DesktopFrame = {width: number, height: number, jpeg: string}
+export type DesktopFrame = {width: number, height: number, sequence: number, jpeg: string}
 
 export type Selection = {
   revision: string
@@ -13,8 +13,7 @@ export type Selection = {
   excerpt: string
 }
 
-export type SelectionAttempt = Selection | {snipTicket: string}
-export type SnipResult = Selection | {pending: true}
+export type SelectionAttempt = Selection | {needsRegion: true}
 
 export class SpatialBridge {
   private internet = require("LensStudio:InternetModule") as InternetModule

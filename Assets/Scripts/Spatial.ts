@@ -4,9 +4,11 @@ import { Button } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Button"
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton"
 import { ElementContent } from "SpectaclesUIKit.lspkg/Scripts/Components/Content/ElementContent"
 import { TextInputField } from "SpectaclesUIKit.lspkg/Scripts/Components/TextInputField/TextInputField"
-import { CompanionStatus, DesktopFrame, Selection, SelectionAttempt, SnipResult, SpatialBridge } from "./SpatialBridge"
+import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable"
+import { Interactor, TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor"
+import { CompanionStatus, DesktopFrame, Selection, SelectionAttempt, SpatialBridge } from "./SpatialBridge"
 
-type Mode = "desktop" | "context" | "jarvis" | "settings"
+type Mode = "desktop" | "snip" | "context" | "jarvis" | "settings"
 type Voice = "ready" | "listening" | "review" | "sending" | "sent"
 
 const WIDTH = 58
@@ -41,8 +43,12 @@ export class Spatial extends BaseScriptComponent {
   private orb!: SceneObject
   private controls!: SceneObject
   private entry!: TextInputField
-  private snipPoll!: DelayedCallbackEvent
-  private snipTicket = ""
+  private regionTarget!: SceneObject
+  private regionOutline!: SceneObject
+  private regionStart: vec2 | null = null
+  private regionEnd: vec2 | null = null
+  private regionDeadline = 0
+  private frameSequence = 0
   private mode: Mode = "desktop"
   private voice: Voice = "ready"
   private status: CompanionStatus | null = null
@@ -88,6 +94,7 @@ export class Spatial extends BaseScriptComponent {
       this.display.clearMaterials()
       this.display.addMaterial(material)
     }
+    this.buildRegionPicker()
     this.screen.enabled = false
     const popupNode = this.object("Assistant popup", this.host, 0, 0)
     this.popup = popupNode.createComponent(BackPlate.getTypeName()) as BackPlate
@@ -109,8 +116,6 @@ export class Spatial extends BaseScriptComponent {
     orbMaterial.mainPass.depthWrite = false
     orbImage.clearMaterials()
     orbImage.addMaterial(orbMaterial)
-    this.snipPoll = this.createEvent("DelayedCallbackEvent")
-    this.snipPoll.bind(() => this.finishSnip())
     this.button(this.host, "Settings", 3, -17, 11, () => this.settings())
     this.button(this.host, "−", 12, -17, 5, () => this.resize(-0.1))
     this.button(this.host, "+", 18, -17, 5, () => this.resize(0.1))
@@ -176,7 +181,10 @@ export class Spatial extends BaseScriptComponent {
     const orbTransform = this.orb.getTransform()
     orbTransform.setLocalScale(new vec3(7.6 * glow, 7.6 * glow, 1))
     orbTransform.setLocalPosition(new vec3(0, 0.35 * Math.sin(now * 2), 0.7))
-    if (!this.screenBusy && now - this.lastPoll > 0.5 && this.showsMirror()) {
+    if (this.mode === "snip" && now > this.regionDeadline) {
+      this.selectionError(new Error("Snip timed out. Start a new region on the live desktop."))
+    }
+    if (!this.screenBusy && now - this.lastPoll > 0.5 && this.showsMirror() && this.mode !== "snip") {
       this.lastPoll = now
       this.poll()
     }
@@ -204,8 +212,9 @@ export class Spatial extends BaseScriptComponent {
       const texture = await new Promise<Texture>((resolve, reject) => {
         Base64.decodeTextureAsync(frame.jpeg, resolve, () => reject(new Error("Could not decode the Windows frame.")))
       })
-      if (!this.showsMirror() || this.closed || !this.streaming) return
+      if (!this.showsMirror() || this.mode === "snip" || this.closed || !this.streaming) return
       this.frameSize = new vec2(frame.width, frame.height)
+      this.frameSequence = frame.sequence
       this.layoutMirror()
       this.display.mainPass.baseTex = texture
       this.screen.enabled = true
@@ -214,6 +223,7 @@ export class Spatial extends BaseScriptComponent {
       this.lastFrame = getTime()
       this.indicator.text = "PC • LIVE"
     } catch (error) {
+      if (this.mode === "snip") return
       this.status = null
       this.lastPoll = getTime() + 1
       this.indicator.text = "PC • OFFLINE"
@@ -230,36 +240,41 @@ export class Spatial extends BaseScriptComponent {
   }
 
   private showsMirror(): boolean {
-    return this.mode === "desktop" || this.mode === "jarvis"
+    return this.mode !== "settings"
   }
 
   private layoutMirror(): void {
-    const alongsideJarvis = this.mode === "jarvis"
-    const width = alongsideJarvis ? 26 : SCREEN_WIDTH
+    const alongside = this.mode === "jarvis" || this.mode === "context"
+    const width = alongside ? 26 : SCREEN_WIDTH
     const factor = Math.min(width / this.frameSize.x, SCREEN_HEIGHT / this.frameSize.y)
     const transform = this.screen.getTransform()
-    transform.setLocalPosition(new vec3(alongsideJarvis ? -14 : 0, 0, 0.2))
+    transform.setLocalPosition(new vec3(alongside ? -14 : 0, 0, 0.2))
     transform.setLocalScale(new vec3(this.frameSize.x * factor, this.frameSize.y * factor, 1))
   }
 
   private panel(mode: Mode, title: string, message: string): void {
     this.mode = mode
     const jarvis = mode === "jarvis"
-    const x = jarvis ? 14 : 0
+    const alongside = jarvis || mode === "context"
+    const x = alongside ? 14 : 0
+    this.regionTarget.enabled = mode === "snip"
+    this.regionOutline.enabled = false
+    this.regionStart = this.regionEnd = null
     const popupNode = this.popup.getSceneObject()
-    popupNode.enabled = mode !== "desktop"
-    if (mode !== "desktop") {
-      this.popup.size = new vec2(jarvis ? 27 : 53, 30)
+    popupNode.enabled = alongside || mode === "settings"
+    if (popupNode.enabled) {
+      this.popup.size = new vec2(alongside ? 27 : 53, 30)
       popupNode.getTransform().setLocalPosition(new vec3(x, 0, -0.8))
     }
     this.title.text = title
-    this.title.layoutRect = Rect.create(jarvis ? -13 : -26, jarvis ? 13 : 26, -1.5, 1.5)
+    this.title.layoutRect = Rect.create(alongside ? -13 : -26, alongside ? 13 : 26, -1.5, 1.5)
     this.title.getSceneObject().getTransform().setLocalPosition(new vec3(x, 12.7, 0.24))
     if (!this.showsMirror() || !this.streaming) this.screen.enabled = false
     this.layoutMirror()
     this.message.text = message
-    this.message.layoutRect = Rect.create(jarvis ? -12.5 : -24.5, jarvis ? 12.5 : 24.5, -9, 9)
-    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(x, 0, 0.24))
+    const textWidth = alongside ? 12.5 : 24.5
+    this.message.layoutRect = Rect.create(-textWidth, textWidth, -9, 9)
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(x, mode === "snip" ? -12.8 : 0, 0.24))
     this.controls.getTransform().setLocalPosition(new vec3(x, 0, 0.25))
     for (let i = this.controls.getChildrenCount() - 1; i >= 0; i--) {
       this.controls.getChild(i).destroy()
@@ -277,7 +292,6 @@ export class Spatial extends BaseScriptComponent {
     this.epoch++
     this.pending = false
     this.selection = null
-    this.snipTicket = ""
     this.voice = "ready"
     this.stopListening()
     this.entry.text = ""
@@ -296,15 +310,17 @@ export class Spatial extends BaseScriptComponent {
 
   private async capture(forceSnip = false): Promise<void> {
     this.reset()
+    if (forceSnip) {
+      this.beginRegion()
+      return
+    }
     const epoch = this.epoch
-    this.panel("context", "CURSIVIS", forceSnip ? "Opening Snipping Tool…" : "Checking for newly copied text…")
+    this.panel("context", "CURSIVIS", "Checking for newly copied text…")
     try {
-      const result = await this.bridge.request<SelectionAttempt>(forceSnip ? "/snip" : "/selection", {})
+      const result = await this.bridge.request<SelectionAttempt>("/selection", {})
       if (epoch !== this.epoch) return
-      if ("snipTicket" in result) {
-        this.snipTicket = result.snipTicket
-        this.panel("context", "CURSIVIS  /  SCREEN SNIP", "On Windows, select New in Snipping Tool and drag around the image. Copy the snip if Windows does not copy it automatically.")
-        this.snipPoll.reset(0.8)
+      if ("needsRegion" in result) {
+        this.beginRegion()
       } else {
         await this.requestSuggestions(result, epoch)
       }
@@ -313,19 +329,115 @@ export class Spatial extends BaseScriptComponent {
     }
   }
 
-  private async finishSnip(): Promise<void> {
-    const ticket = this.snipTicket
-    if (!ticket) return
+  private buildRegionPicker(): void {
+    this.regionTarget = this.object("Cursivis selection surface", this.screen, 0, 0, 0.4)
+    const collider = this.regionTarget.createComponent("Physics.ColliderComponent") as ColliderComponent
+    const box = Shape.createBoxShape()
+    box.size = new vec3(1, 1, 0.45)
+    collider.shape = box
+    const target = this.regionTarget.createComponent(Interactable.getTypeName()) as Interactable
+    target.colliders = [collider]
+    target.targetingMode = TargetingMode.Direct | TargetingMode.Indirect
+    target.allowMultipleInteractors = false
+    target.keepHoverOnTrigger = true
+    this.regionTarget.enabled = false
+
+    this.regionOutline = this.object("Cursivis snip outline", this.screen, 0, 0, 0.8)
+    const material = DISPLAY_MATERIAL.clone()
+    const texture = ProceduralTextureProvider.createWithFormat(1, 1, TextureFormat.RGBA8Unorm)
+    const pixels = texture.control as ProceduralTextureProvider
+    pixels.setPixels(0, 0, 1, 1, new Uint8Array([97, 235, 255, 255]))
+    material.mainPass.baseTex = texture
+    for (let i = 0; i < 4; i++) {
+      const node = this.object("Snip edge", this.regionOutline, 0, 0)
+      const image = node.createComponent("Component.Image") as Image
+      image.clearMaterials()
+      image.addMaterial(material)
+    }
+    this.regionOutline.enabled = false
+    target.onTriggerStart.add(event => {
+      if (this.mode === "snip") this.regionStart = this.regionPoint(event.interactor)
+    })
+    target.onTriggerUpdate.add(event => this.updateRegion(event.interactor))
+    target.onTriggerEnd.add(event => this.finishRegion(event.interactor))
+    target.onTriggerEndOutside.add(event => this.finishRegion(event.interactor))
+    target.onTriggerCanceled.add(() => {
+      this.regionStart = this.regionEnd = null
+      this.regionOutline.enabled = false
+    })
+  }
+
+  private beginRegion(): void {
+    if (!this.streaming || !this.screen.enabled || !this.frameSequence) {
+      this.selectionError(new Error("Wait for the live Windows desktop before starting a snip."))
+      return
+    }
+    this.panel("snip", "CURSIVIS  /  PINCH AND DRAG TO SNIP", "Release to capture   •   × to cancel")
+    this.regionDeadline = getTime() + 45
+  }
+
+  private regionPoint(interactor: Interactor): vec2 | null {
+    const {startPoint, direction} = interactor
+    if (!startPoint) return null
+    const inverse = this.screen.getTransform().getInvertedWorldTransform()
+    let point = inverse.multiplyPoint(startPoint)
+    if (interactor.activeTargetingMode !== TargetingMode.Direct && direction) {
+      const ray = inverse.multiplyDirection(direction)
+      if (Math.abs(ray.z) < 0.00001) return null
+      const distance = -point.z / ray.z
+      if (distance < 0) return null
+      point = point.add(ray.uniformScale(distance))
+    }
+    return new vec2(Math.max(-0.5, Math.min(0.5, point.x)), Math.max(-0.5, Math.min(0.5, point.y)))
+  }
+
+  private updateRegion(interactor: Interactor): void {
+    const start = this.regionStart
+    if (this.mode !== "snip" || !start) return
+    const end = this.regionPoint(interactor)
+    if (!end) return
+    this.regionEnd = end
+    const w = Math.abs(start.x - end.x)
+    const h = Math.abs(start.y - end.y)
+    const x = (start.x + end.x) / 2
+    const y = (start.y + end.y) / 2
+    const edges = [
+      [x, start.y, w, 0.007], [x, end.y, w, 0.007],
+      [start.x, y, 0.004, h], [end.x, y, 0.004, h],
+    ]
+    edges.forEach(([px, py, sx, sy], i) => {
+      const transform = this.regionOutline.getChild(i).getTransform()
+      transform.setLocalPosition(new vec3(px, py, 0))
+      transform.setLocalScale(new vec3(sx, sy, 1))
+    })
+    this.regionOutline.enabled = w > 0 && h > 0
+  }
+
+  private async finishRegion(interactor: Interactor): Promise<void> {
+    if (this.mode !== "snip") return
+    this.updateRegion(interactor)
+    const start = this.regionStart
+    const end = this.regionEnd
+    this.regionStart = this.regionEnd = null
+    this.regionOutline.enabled = false
+    if (!start || !end || Math.abs(start.x - end.x) * this.frameSize.x < 8 ||
+        Math.abs(start.y - end.y) * this.frameSize.y < 8) {
+      this.message.text = "Drag a larger rectangle   •   × to cancel"
+      return
+    }
     const epoch = this.epoch
+    const sequence = this.frameSequence
+    this.panel("context", "CURSIVIS  /  SCREEN SNIP", "Preparing the selected region…")
     try {
-      const result = await this.bridge.request<SnipResult>("/snip/result", {ticket})
+      const result = await this.bridge.request<Selection>("/region", {
+        sequence,
+        left: Math.min(start.x, end.x) + 0.5,
+        top: 0.5 - Math.max(start.y, end.y),
+        right: Math.max(start.x, end.x) + 0.5,
+        bottom: 0.5 - Math.min(start.y, end.y),
+      })
       if (epoch !== this.epoch) return
-      if ("pending" in result) {
-        this.snipPoll.reset(0.8)
-      } else {
-        this.snipTicket = ""
-        await this.requestSuggestions(result, epoch)
-      }
+      await this.requestSuggestions(result, epoch)
     } catch (error) {
       if (epoch === this.epoch) this.selectionError(error)
     }
@@ -339,9 +451,8 @@ export class Spatial extends BaseScriptComponent {
   }
 
   private selectionError(error: unknown): void {
-    this.snipTicket = ""
     this.panel("context", "CURSIVIS", String(error))
-    this.button(this.controls, "Retry", -8, -11, 13, () => {
+    this.button(this.controls, "Retry", -6.5, -11, 10, () => {
       if (!this.selection) {
         this.capture()
         return
@@ -351,17 +462,17 @@ export class Spatial extends BaseScriptComponent {
         if (epoch === this.epoch) this.selectionError(reason)
       })
     })
-    this.button(this.controls, "Snip screen", 9, -11, 17, () => this.capture(true))
+    this.button(this.controls, "Snip screen", 5.7, -11, 14, () => this.capture(true))
   }
 
   private suggestions(selection: Selection, actions: string[]): void {
     this.panel("context", selection.characters ? "CURSIVIS  /  " + selection.characters + " CHARS" : "CURSIVIS  /  IMAGE", selection.excerpt)
-    this.message.layoutRect = Rect.create(-16, 16, -5, 5)
-    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(-7, 5.5, 0.24))
-    this.button(this.controls, "Snip screen", 17, 7, 16, () => this.capture(true))
+    this.message.layoutRect = Rect.create(-12, 12, -2, 2)
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(14, 8, 0.24))
+    this.button(this.controls, "Snip screen", 0, 3.2, 17, () => this.capture(true))
     actions.forEach((action, index) => {
       const name = action[0].toUpperCase() + action.slice(1).replace(/_/g, " ")
-      this.button(this.controls, name, 0, -2 - index * 5.4, 30, () => this.analyze(action))
+      this.button(this.controls, name, 0, -2 - index * 5.4, 25, () => this.analyze(action))
     })
   }
 
@@ -375,7 +486,7 @@ export class Spatial extends BaseScriptComponent {
         revision: this.selection.revision, action,
       })
       if (epoch === this.epoch) {
-        const pages = result.result.match(/[\s\S]{1,240}/g) || []
+        const pages = result.result.match(/[\s\S]{1,135}/g) || []
         this.resultPage(pages, 0, result.model)
       }
     } catch (error) {
@@ -390,8 +501,8 @@ export class Spatial extends BaseScriptComponent {
 
   private resultPage(pages: string[], index: number, model: string): void {
     this.panel("context", "CURSIVIS  /  " + (index + 1) + " OF " + pages.length, pages[index])
-    if (index > 0) this.button(this.controls, "Previous", -17, -11, 13, () => this.resultPage(pages, index - 1, model))
-    if (index + 1 < pages.length) this.button(this.controls, "Next", 17, -11, 11, () => this.resultPage(pages, index + 1, model))
+    if (index > 0) this.button(this.controls, "Previous", -6, -11, 12, () => this.resultPage(pages, index - 1, model))
+    if (index + 1 < pages.length) this.button(this.controls, "Next", 6.5, -11, 10, () => this.resultPage(pages, index + 1, model))
   }
 
   private async listen(): Promise<void> {
