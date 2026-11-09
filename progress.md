@@ -50,3 +50,5 @@ The repeated Cursivis run produced ranked actions, then received HTTP 503 from t
 - The next live Preview session stopped during the owner's built-in recording attempt at 21:19:35 IST. Lens Studio logged an out-of-memory error while allocating an image in Preview. Windows event 2004 showed about 23.87 GiB of Lens Studio committed memory and about 33 MiB remaining below the system commit limit. Intel graphics reported Code 0 afterward. The source of the memory growth has not been isolated.
 
 The owner reported submitting the demo video and Devpost entry. The original skill-pack brief remains in `devpost/design-brief.md`, with a separate implementation and verification record. The Windows launcher automates environment setup and opening the project. The Inspector pairing and external provider setup remain local steps.
+
+Added a runtime architecture diagram showing the local Preview boundary, mirror, contextual analysis, and Jarvis action path.

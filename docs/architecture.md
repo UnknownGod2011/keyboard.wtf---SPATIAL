@@ -1,5 +1,28 @@
 # Spatial architecture
 
+## Runtime at a glance
+
+```mermaid
+flowchart LR
+    Lens["SPECS Lens<br/>Lens Studio Interactive Preview"]
+    Bridge["SPATIAL Python bridge<br/>127.0.0.1:48790"]
+    Desktop["Windows desktop and clipboard"]
+    Cursivis["Cursivis<br/>Local AI service :51880"]
+    Gemini["Configured AI provider<br/>Gemini in the tested setup"]
+    Jarvis["Keyboard.wtf Jarvis<br/>Local settings service :8090"]
+    Actions["Windows actions and speech"]
+
+    Lens -->|"Paired requests and reviewed turns"| Bridge
+    Bridge -->|"JPEG frames, suggestions and results"| Lens
+    Desktop -->|"Opt-in screen capture or copied text"| Bridge
+    Bridge <-->|"Selected region or text and read-only analysis"| Cursivis
+    Cursivis <-->|"Context and provider response"| Gemini
+    Bridge -->|"Reviewed turn via protected endpoint"| Jarvis
+    Jarvis -->|"Existing action policy and execution"| Actions
+```
+
+The ports shown are defaults. The Lens and bridge run on the same Windows machine for Preview. The two optional Windows apps own their own credentials and setup. A physical SPECS device would need a separately verified secure transport.
+
 ## Ownership
 
 The new Lens owns world placement, navigation, display and status. A separate Windows companion owns capture, consent and request routing. Keyboard.wtf owns Jarvis conversation, speech playback, local actions and confirmation. Cursivis owns analysis, provider selection and its existing desktop triggers. Its trigger socket opens the desktop workflow, while its local /suggest-actions and /analyze endpoints are suitable for the AR workflow. The older Keyboard.wtf serves as a historical UX reference. No existing application is bundled here.

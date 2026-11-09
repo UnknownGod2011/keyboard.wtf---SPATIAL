@@ -87,4 +87,4 @@ The companion binds to loopback. It pairs with the Lens using the local token, a
 
 Run the companion test suite with `.\.venv\Scripts\python.exe -m unittest discover -s bridge -v`. The documented live path targets Windows Interactive Preview. Physical SPECS networking and hand tracking remain unverified.
 
-See the [architecture](docs/architecture.md), [Devpost brief](devpost/design-brief.md), [demo script](DEMO_SCRIPT.md), and [submission checklist](SUBMISSION.md).
+See the [architecture diagram](docs/architecture.md#runtime-at-a-glance), [Devpost brief](devpost/design-brief.md), [implementation and validation record](devpost/implementation.md), [demo script](DEMO_SCRIPT.md), and [submission checklist](SUBMISSION.md).
