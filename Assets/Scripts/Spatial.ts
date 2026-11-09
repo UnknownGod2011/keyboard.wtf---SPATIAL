@@ -157,7 +157,7 @@ export class Spatial extends BaseScriptComponent {
     const pulse = this.voice === "listening" || this.voice === "sending" ? 0.055 : 0.022
     const glow = 1 + Math.sin(now * (this.voice === "listening" ? 6 : 3)) * pulse
     this.orb.getTransform().setLocalScale(new vec3(glow, glow, 1))
-    if (!this.screenBusy && now - this.lastPoll > 0.3 && this.mode === "desktop") {
+    if (!this.screenBusy && now - this.lastPoll > 0.5 && this.mode === "desktop") {
       this.lastPoll = now
       this.poll()
     }

@@ -8,7 +8,9 @@ Build a runnable SPECS workspace where a world-placed Windows view, Jarvis voice
 - [x] Located the official SPECS Base Template and copied its project to Spatial.esproj. The bundled Interaction Kit and UI Kit are present.
 - [x] Opened the destination in Lens Studio 5.24.1. The official template compiled in SPECS 27 Interactive Preview. The destination MCP returned its scene and imported assets. It created the Spatial Display material and attached the Spatial script to the saved workspace.
 - [x] Verified changing Windows content at the capture boundary using the synthetic demo document. A 614 × 334 capture contained the expected document background and changed after the document heading changed.
-- [ ] Verify that those changing pixels arrive as a texture in SPECS Interactive Preview. The paired request reaches Snap's transport check, which reports “URL is not secure” until the project owner enables Allow Experimental API.
+- [x] Verified the synthetic Windows document in SPECS Interactive Preview after the owner enabled Experimental API. An edit made in Windows appeared in Preview with the PC LIVE indicator. Evidence is in the local synthetic capture `.artifacts/spatial-live-mirror.png`.
+- [x] Added the requested whole-desktop mode. A Windows smoke test captured the full 1920 × 1080 virtual desktop and encoded a 960 × 540 frame without saving desktop pixels. All five companion tests passed. The explicit crop remains available for recordings.
+- [ ] Verify the full-desktop stream in Preview. The paired live Preview evidence covers a synthetic crop. Full-desktop polling was deferred after the Windows restart.
 - [ ] Verify the wired world-space UI and action controls. The source includes the UI Kit frame and buttons, JPEG polling, ASR with typed fallback, Cursivis action menu, and settings.
 - [ ] Exercise Preview, LEAF and actual Windows outcomes. Record and publish an eligible demo.
 
@@ -31,6 +33,7 @@ The repeated Cursivis run produced ranked actions, then received HTTP 503 from t
 - `bridge/demo_document.py` supplies a safe, selectable Windows fixture for the recording.
 - `1145701` adds the synthetic Windows fixture and provider busy/retry handling.
 - `c96cb98` was compiled and rendered in the editor. The local evidence image `.artifacts/spatial-preview.png` shows the unpaired workspace with its full control labels. It also shows an uneven frame render across the Preview, which still needs visual QA.
-- Enable the local Preview transport permission, then test authenticated texture rendering and actual pinch input. Capture a clip after confirming the complete visible workflow.
+- While testing the dock in Preview, Windows restarted and logged graphics-kernel bug check `0x00000113`. The exact cause has not been established. Reopened a single Lens Studio instance and confirmed it responded with `Spatial.esproj` open. The Lens now caps capture requests at two per second, and live streaming should be retested in short steps. Cursivis was unavailable immediately after reboot.
+- Test actual pinch input, Jarvis voice and Cursivis selection through Preview before recording the integrated demo.
 
 Submission readiness is pending. There is no recorded demo or verified Lens workflow yet.

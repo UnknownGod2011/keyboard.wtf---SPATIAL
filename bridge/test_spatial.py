@@ -15,12 +15,12 @@ from spatial import BridgeError, Handler, Spatial, ThreadingHTTPServer, local_re
 class CompanionTests(unittest.TestCase):
     def setUp(self):
         self.app = Spatial(argparse.Namespace(
-            share=None, context=True, jarvis=True, microphone=False,
+            share=None, desktop=False, context=True, jarvis=True, microphone=False,
             token="test-only", cursivis_port=51880, jarvis_port=8090,
         ))
 
     def test_capture_is_opt_in_and_jpeg_contains_captured_pixels(self):
-        with self.assertRaisesRegex(BridgeError, "Enable capture"):
+        with self.assertRaisesRegex(BridgeError, "Start the companion"):
             self.app.capture()
         self.app.options.share = (0, 0, 40, 30)
         with patch("spatial.ImageGrab.grab", return_value=Image.new("RGB", (40, 30), (90, 180, 225))) as grab:
@@ -29,6 +29,14 @@ class CompanionTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(frame["jpeg"]))) as image:
             self.assertEqual(image.size, (40, 30))
             self.assertTrue(all(abs(got - want) <= 4 for got, want in zip(image.getpixel((20, 15)), (90, 180, 225))))
+
+    def test_full_desktop_captures_all_displays_without_a_crop(self):
+        self.app.options.desktop = True
+        with patch("spatial.ImageGrab.grab", return_value=Image.new("RGB", (1920, 1080))) as grab:
+            frame = self.app.capture()
+        grab.assert_called_once_with(bbox=None, all_screens=True)
+        self.assertTrue(self.app.status()["stream"])
+        self.assertEqual((frame["width"], frame["height"]), (960, 540))
 
     def test_revision_bound_analysis_uses_actual_snapshot_and_only_safe_actions(self):
         with patch("spatial.clipboard_text", return_value="A valve opens when the soil dries."):

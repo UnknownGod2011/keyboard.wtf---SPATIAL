@@ -71,7 +71,7 @@ class Spatial:
     def status(self):
         return {
             "connected": True,
-            "stream": self.options.share is not None,
+            "stream": self.options.desktop or self.options.share is not None,
             "context": self.options.context,
             "jarvis": self.options.jarvis,
             "microphone": self.options.microphone,
@@ -79,8 +79,8 @@ class Spatial:
         }
 
     def capture(self):
-        if self.options.share is None:
-            raise BridgeError("Enable capture on Windows and choose a sharing region.", 403)
+        if not self.options.desktop and self.options.share is None:
+            raise BridgeError("Start the companion with --desktop or choose a sharing region.", 403)
         now = time.monotonic()
         with self.lock:
             if now - self.last_frame < 0.18:
@@ -235,7 +235,9 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=48790)
-    parser.add_argument("--share", nargs=4, type=int, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
+    capture = parser.add_mutually_exclusive_group()
+    capture.add_argument("--desktop", action="store_true", help="Share the entire Windows desktop across displays")
+    capture.add_argument("--share", nargs=4, type=int, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
     parser.add_argument("--context", action="store_true", help="Allow explicit clipboard capture and Cursivis analysis")
     parser.add_argument("--jarvis", action="store_true", help="Allow confirmed turns to Keyboard.wtf")
     parser.add_argument("--microphone", action="store_true", help="Allow SPECS ASR during Jarvis turns")
