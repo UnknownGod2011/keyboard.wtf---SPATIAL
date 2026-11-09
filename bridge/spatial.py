@@ -5,6 +5,7 @@ import base64
 import hmac
 import io
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -14,14 +15,14 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import request
+from urllib import error as url_error, request
 
 from PIL import ImageGrab
 
 
 ACTIONS = ("summarize", "explain", "rewrite")
 CLIP_LIMIT = 20_000
-CONFIG = Path(__file__).with_name("bridge.local.json")
+CONFIG = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "keyboard.wtf SPATIAL" / "bridge.local.json"
 
 
 class BridgeError(Exception):
@@ -125,6 +126,10 @@ class Spatial:
         try:
             path = "/suggest-actions" if suggestions else "/analyze"
             result = json.loads(local_request(self.options.cursivis_port, path, data, timeout=65))
+        except url_error.HTTPError as error:
+            if error.code in (429, 503):
+                raise BridgeError("Cursivis provider is busy. Try the action again shortly.", 503) from error
+            raise BridgeError("Cursivis rejected the request. Check its provider in Windows.", 502) from error
         except (OSError, ValueError) as error:
             raise BridgeError("Cursivis could not complete this request. Check its local service and provider.", 502) from error
         if suggestions:
@@ -244,12 +249,13 @@ def main():
         options.token = json.loads(CONFIG.read_text(encoding="utf-8"))["token"]
     else:
         options.token = secrets.token_urlsafe(32)
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
         with CONFIG.open("x", encoding="utf-8") as file:
             json.dump({"token": options.token}, file)
     with ThreadingHTTPServer(("127.0.0.1", options.port), Handler) as server:
         server.app = Spatial(options)
         print(f"SPATIAL Windows companion on 127.0.0.1:{options.port}", flush=True)
-        print(f"Pairing configuration is in {CONFIG.name}. Ctrl+C stops the companion.", flush=True)
+        print(f"Pairing configuration is in {CONFIG}. Ctrl+C stops the companion.", flush=True)
         server.serve_forever()
 
 

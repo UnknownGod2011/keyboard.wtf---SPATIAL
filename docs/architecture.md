@@ -21,7 +21,7 @@ Use a one-hand Interaction Kit ray and pinch. Hover highlights the target and sh
 | Surface | Gesture | Transition |
 |---|---|---|
 | Top rail | Pinch and drag | Idle → Move → Idle. Keep the new world transform on release. |
-| Size controls | Pinch plus or minus | Change the width by one increment within 48–90 cm, preserving aspect ratio. |
+| Size controls | Pinch plus or minus | Change the width by one increment within roughly 48–79 cm, preserving aspect ratio. |
 | Shared pixels | Aim | Map the ray hit to UV within the active image rectangle, excluding letterboxing. In the Preview fallback, use the physical PC pointer to select. |
 | Cursivis chip | Pinch | Idle → Capture. Explicitly capture the copied Windows text and keep one revision in memory. |
 | Suggestion tile | Aim and pinch | Context → Analyzing → Result. Only an advertised read-only action can run against that revision. |

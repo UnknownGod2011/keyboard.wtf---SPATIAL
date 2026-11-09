@@ -278,7 +278,10 @@ export class Spatial extends BaseScriptComponent {
         this.resultPage(pages, 0, result.model)
       }
     } catch (error) {
-      if (epoch === this.epoch) this.panel("context", "CURSIVIS", String(error))
+      if (epoch === this.epoch) {
+        this.panel("context", "CURSIVIS", String(error))
+        this.button(this.controls, "Retry", 0, -11, 12, () => this.analyze(action))
+      }
     } finally {
       if (epoch === this.epoch) this.pending = false
     }

@@ -2,6 +2,8 @@
 
 Use this shot list after each workflow passes in Interactive Preview. Record a synthetic Windows document inside a dedicated sharing rectangle. Keep personal apps, account details, credentials, notification banners and irrelevant desktop areas outside the recording.
 
+Run `python bridge/demo_document.py` for a selectable Windows document with a live clock. Share only the interior of its window.
+
 | Time | Show | Narration |
 |---|---|---|
 | 0:00–0:15 | The Lens in SPECS Preview, with the shared workspace in the room | “This is keyboard.wtf SPATIAL. I can keep a Windows document beside my work and ask for help without leaving it.” |
