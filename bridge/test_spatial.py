@@ -43,14 +43,39 @@ class CompanionTests(unittest.TestCase):
             selection = self.app.read_selection()
         with self.assertRaisesRegex(BridgeError, "Capture the selection again"):
             self.app.context({"revision": "stale", "action": "summarize"}, suggestions=False)
-        with self.assertRaisesRegex(BridgeError, "Choose Summarize"):
+        with self.assertRaisesRegex(BridgeError, "Choose one"):
             self.app.context({"revision": selection["revision"], "action": "execute"}, suggestions=False)
+        with patch("spatial.local_request", return_value=b'{"recommendedAction":"summarize","alternatives":["bullet_points"]}'):
+            self.app.context(selection, suggestions=True)
         with patch("spatial.local_request", return_value=b'{"result":"Dry soil opens the valve.","model":"test"}') as upstream:
             result = self.app.context({**selection, "action": "summarize"}, suggestions=False)
         port, path, data = upstream.call_args.args
         self.assertEqual((port, path), (51880, "/analyze"))
         self.assertEqual(data["selection"]["text"], "A valve opens when the soil dries.")
         self.assertEqual(result["result"], "Dry soil opens the valve.")
+
+    def test_suggestions_vary_and_only_offered_text_actions_can_run(self):
+        cases = [
+            ("def total(items): return sum(items)", "debug_code", "explain_code"),
+            ("Hi, can you confirm Friday's meeting?", "draft_reply", "polish_email"),
+        ]
+        for selected, recommended, alternative in cases:
+            with self.subTest(recommended=recommended):
+                with patch("spatial.clipboard_text", return_value=selected):
+                    selection = self.app.read_selection()
+                offer = json.dumps({
+                    "recommendedAction": recommended,
+                    "alternatives": ["execute", alternative, recommended],
+                    "extendedAlternatives": ["translate"],
+                }).encode()
+                with patch("spatial.local_request", return_value=offer):
+                    result = self.app.context(selection, suggestions=True)
+                self.assertEqual(result["actions"], (recommended, alternative, "translate"))
+                with self.assertRaisesRegex(BridgeError, "Choose one"):
+                    self.app.context({**selection, "action": "summarize"}, suggestions=False)
+                with patch("spatial.local_request", return_value=b'{"result":"A real provider result would appear here."}') as upstream:
+                    self.app.context({**selection, "action": recommended}, suggestions=False)
+                self.assertEqual(upstream.call_args.args[2]["actionHint"], recommended)
 
     def test_jarvis_requires_confirmation_and_preserves_upstream_token(self):
         with patch("spatial.local_request") as upstream:

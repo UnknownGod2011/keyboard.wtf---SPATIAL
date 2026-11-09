@@ -15,8 +15,8 @@ Keyboard.wtf and Cursivis are separately installed. The companion defaults to th
 ### Controls
 
 - Drag the frame rail to reposition. Use **−** and **+** for size.
-- Copy a selection in Windows. Pinch **Cursivis**, then choose a read-only action.
-- Pinch **Jarvis**, speak or type a turn, and review before pressing **Send**. The Windows overlay reports the outcome and retains its normal controls.
+- Copy a text selection in Windows. Pinch **Cursivis**, then choose one of the actions returned for that selection. The Lens displays the result in a dismissible popup.
+- Pinch **Jarvis** to open its popup beside the live desktop. Speak or type a turn and review it before pressing **Send**. Keyboard.wtf handles voice replies and Windows actions through its existing assistant. **Talk again** opens another turn.
 - **Settings** shows connection, streaming and permission status. **×** closes the current workflow or exits the workspace.
 
 See the [architecture](docs/architecture.md), [Devpost brief](devpost/design-brief.md), [demo script](DEMO_SCRIPT.md), and [submission checklist](SUBMISSION.md).

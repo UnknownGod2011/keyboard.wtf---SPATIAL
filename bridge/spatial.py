@@ -20,7 +20,13 @@ from urllib import error as url_error, request
 from PIL import ImageGrab
 
 
-ACTIONS = ("summarize", "explain", "rewrite")
+# These Cursivis text actions return content without executing Windows actions.
+TEXT_ACTIONS = frozenset({
+    "answer_question", "bullet_points", "debug_code", "draft_reply", "expand_text",
+    "explain", "explain_code", "extract_insights", "extract_product_info", "improve_code",
+    "optimize_code", "optimize_prompt", "polish_email", "rewrite", "rewrite_structured",
+    "suggest_captions", "summarize", "translate",
+})
 CLIP_LIMIT = 20_000
 CONFIG = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "keyboard.wtf SPATIAL" / "bridge.local.json"
 
@@ -102,8 +108,8 @@ class Spatial:
         text = clipboard_text()
         with self.lock:
             revision = secrets.token_urlsafe(18)
-            self.snapshot = (revision, text, time.monotonic() + 120)
-        return {"revision": revision, "characters": len(text), "excerpt": text[:135], "actions": ACTIONS}
+            self.snapshot = (revision, text, time.monotonic() + 120, ())
+        return {"revision": revision, "characters": len(text), "excerpt": text[:135]}
 
     def context(self, payload, suggestions):
         if not self.options.context:
@@ -113,8 +119,8 @@ class Spatial:
         if current is None or current[0] != payload.get("revision") or current[2] < time.monotonic():
             raise BridgeError("Capture the selection again.", 409)
         action = payload.get("action")
-        if not suggestions and action not in ACTIONS:
-            raise BridgeError("Choose Summarize, Explain or Rewrite.")
+        if not suggestions and action not in current[3]:
+            raise BridgeError("Choose one of the actions offered for this selection.")
         data = {
             "protocolVersion": "1.0.0", "requestId": str(uuid.uuid4()), "mode": "guided",
             "selection": {"kind": "text", "text": current[1]},
@@ -133,8 +139,21 @@ class Spatial:
         except (OSError, ValueError) as error:
             raise BridgeError("Cursivis could not complete this request. Check its local service and provider.", 502) from error
         if suggestions:
-            ranked = [result.get("recommendedAction"), *result.get("alternatives", []), *ACTIONS]
-            return {"actions": list(dict.fromkeys(item for item in ranked if item in ACTIONS))}
+            ranked = [result.get("recommendedAction")]
+            for key in ("alternatives", "extendedAlternatives"):
+                values = result.get(key)
+                if isinstance(values, list):
+                    ranked.extend(values)
+            actions = tuple(dict.fromkeys(
+                item for item in ranked if isinstance(item, str) and item in TEXT_ACTIONS
+            ))[:3]
+            if not actions:
+                raise BridgeError("Cursivis offered no supported actions for this selection.", 502)
+            with self.lock:
+                if self.snapshot is not current or current[2] < time.monotonic():
+                    raise BridgeError("Capture the selection again.", 409)
+                self.snapshot = (*current[:3], actions)
+            return {"actions": actions}
         answer = result.get("result")
         if not isinstance(answer, str) or not answer.strip():
             raise BridgeError("Cursivis returned an empty result.", 502)

@@ -11,7 +11,6 @@ export type Selection = {
   revision: string
   characters: number
   excerpt: string
-  actions: string[]
 }
 
 export class SpatialBridge {

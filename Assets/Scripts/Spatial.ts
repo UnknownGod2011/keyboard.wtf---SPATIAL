@@ -1,4 +1,5 @@
 import { Frame } from "SpectaclesUIKit.lspkg/Scripts/Components/Frame/Frame"
+import { BackPlate } from "SpectaclesUIKit.lspkg/Scripts/BackPlate"
 import { Button } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/Button"
 import { RoundButton } from "SpectaclesUIKit.lspkg/Scripts/Components/Button/RoundButton"
 import { ElementContent } from "SpectaclesUIKit.lspkg/Scripts/Components/Content/ElementContent"
@@ -12,7 +13,6 @@ const WIDTH = 58
 const HEIGHT = 43
 const SCREEN_WIDTH = 54
 const SCREEN_HEIGHT = 23
-const ACTIONS = ["summarize", "explain", "rewrite"]
 const INK = new vec4(0.88, 0.98, 1, 1)
 const CYAN = new vec4(0.38, 0.92, 1, 1)
 const DISPLAY_MATERIAL = requireAsset("../Spatial Display.mat") as Material
@@ -32,6 +32,8 @@ export class Spatial extends BaseScriptComponent {
   private host!: SceneObject
   private display!: Image
   private screen!: SceneObject
+  private popup!: BackPlate
+  private frameSize = new vec2(16, 9)
   private indicator!: Text
   private message!: Text
   private title!: Text
@@ -74,7 +76,6 @@ export class Spatial extends BaseScriptComponent {
     this.host = this.object("Spatial UI", this.frame.contentTransform.getSceneObject(), 0, 0, 0.6)
     this.label("KEYBOARD.WTF  /  SPATIAL", -11, 18.3, 33, 3, 74, CYAN)
     this.indicator = this.label("PC • OFFLINE", 20, 18.3, 15, 3, 58, INK)
-    this.title = this.label("DESKTOP", 0, 12.7, 52, 3, 73, CYAN)
     this.screen = this.object("Live Windows Image", this.host, 0, 0, 0.2)
     if (DISPLAY_MATERIAL) {
       const material = DISPLAY_MATERIAL.clone()
@@ -85,6 +86,10 @@ export class Spatial extends BaseScriptComponent {
       this.display.addMaterial(material)
     }
     this.screen.enabled = false
+    const popupNode = this.object("Assistant popup", this.host, 0, 0)
+    this.popup = popupNode.createComponent(BackPlate.getTypeName()) as BackPlate
+    popupNode.enabled = false
+    this.title = this.label("DESKTOP", 0, 12.7, 52, 3, 73, CYAN)
     this.message = this.label("", 0, 0, 49, 18, 64, INK)
     this.controls = this.object("Workflow controls", this.host, 0, 0, 0.25)
     this.entry = this.object("Jarvis transcript", this.host, 0, 2, 0.25)
@@ -157,7 +162,7 @@ export class Spatial extends BaseScriptComponent {
     const pulse = this.voice === "listening" || this.voice === "sending" ? 0.055 : 0.022
     const glow = 1 + Math.sin(now * (this.voice === "listening" ? 6 : 3)) * pulse
     this.orb.getTransform().setLocalScale(new vec3(glow, glow, 1))
-    if (!this.screenBusy && now - this.lastPoll > 0.5 && this.mode === "desktop") {
+    if (!this.screenBusy && now - this.lastPoll > 0.5 && this.showsMirror()) {
       this.lastPoll = now
       this.poll()
     }
@@ -170,9 +175,10 @@ export class Spatial extends BaseScriptComponent {
       if (!this.status || getTime() - this.lastFrame > 2) {
         this.status = await this.bridge.request<CompanionStatus>("/status")
       }
-      if (this.mode !== "desktop" || !this.streaming) return
+      if (!this.showsMirror() || !this.streaming) return
       if (!this.status.stream) {
-        this.desktopMessage("PC connected. Screen sharing is paused on Windows.")
+        this.screen.enabled = false
+        if (this.mode === "desktop") this.desktopMessage("PC connected. Screen sharing is paused on Windows.")
         this.indicator.text = "PC • READY"
         return
       }
@@ -184,12 +190,12 @@ export class Spatial extends BaseScriptComponent {
       const texture = await new Promise<Texture>((resolve, reject) => {
         Base64.decodeTextureAsync(frame.jpeg, resolve, () => reject(new Error("Could not decode the Windows frame.")))
       })
-      if (this.mode !== "desktop" || this.closed || !this.streaming) return
-      const factor = Math.min(SCREEN_WIDTH / frame.width, SCREEN_HEIGHT / frame.height)
-      this.screen.getTransform().setLocalScale(new vec3(frame.width * factor, frame.height * factor, 1))
+      if (!this.showsMirror() || this.closed || !this.streaming) return
+      this.frameSize = new vec2(frame.width, frame.height)
+      this.layoutMirror()
       this.display.mainPass.baseTex = texture
       this.screen.enabled = true
-      this.message.text = ""
+      if (this.mode === "desktop") this.message.text = ""
       if (!this.lastFrame) print("SPATIAL first live Windows texture")
       this.lastFrame = getTime()
       this.indicator.text = "PC • LIVE"
@@ -197,6 +203,7 @@ export class Spatial extends BaseScriptComponent {
       this.status = null
       this.lastPoll = getTime() + 1
       this.indicator.text = "PC • OFFLINE"
+      this.screen.enabled = false
       if (this.mode === "desktop") this.desktopMessage(String(error))
     } finally {
       this.screenBusy = false
@@ -208,15 +215,44 @@ export class Spatial extends BaseScriptComponent {
     this.message.text = text
   }
 
+  private showsMirror(): boolean {
+    return this.mode === "desktop" || this.mode === "jarvis"
+  }
+
+  private layoutMirror(): void {
+    const alongsideJarvis = this.mode === "jarvis"
+    const width = alongsideJarvis ? 26 : SCREEN_WIDTH
+    const factor = Math.min(width / this.frameSize.x, SCREEN_HEIGHT / this.frameSize.y)
+    const transform = this.screen.getTransform()
+    transform.setLocalPosition(new vec3(alongsideJarvis ? -14 : 0, 0, 0.2))
+    transform.setLocalScale(new vec3(this.frameSize.x * factor, this.frameSize.y * factor, 1))
+  }
+
   private panel(mode: Mode, title: string, message: string): void {
     this.mode = mode
+    const jarvis = mode === "jarvis"
+    const x = jarvis ? 14 : 0
+    const popupNode = this.popup.getSceneObject()
+    popupNode.enabled = mode !== "desktop"
+    if (mode !== "desktop") {
+      this.popup.size = new vec2(jarvis ? 27 : 53, 30)
+      popupNode.getTransform().setLocalPosition(new vec3(x, 0, -0.8))
+    }
     this.title.text = title
-    this.desktopMessage(message)
-    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0, 0.24))
+    this.title.layoutRect = Rect.create(jarvis ? -13 : -26, jarvis ? 13 : 26, -1.5, 1.5)
+    this.title.getSceneObject().getTransform().setLocalPosition(new vec3(x, 12.7, 0.24))
+    if (!this.showsMirror() || !this.streaming) this.screen.enabled = false
+    this.layoutMirror()
+    this.message.text = message
+    this.message.layoutRect = Rect.create(jarvis ? -12.5 : -24.5, jarvis ? 12.5 : 24.5, -9, 9)
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(x, 0, 0.24))
+    this.controls.getTransform().setLocalPosition(new vec3(x, 0, 0.25))
     for (let i = this.controls.getChildrenCount() - 1; i >= 0; i--) {
       this.controls.getChild(i).destroy()
     }
     this.entry.getSceneObject().enabled = false
+    this.entry.getSceneObject().getTransform().setLocalPosition(new vec3(x, 2, 0.25))
+    this.entry.size = new vec3(jarvis ? 24 : 44, 5, 1)
   }
 
   private showDesktop(): void {
@@ -251,19 +287,24 @@ export class Spatial extends BaseScriptComponent {
       const selection = await this.bridge.request<Selection>("/selection", {})
       if (epoch !== this.epoch) return
       this.selection = selection
-      this.suggestions(selection, selection.actions)
+      this.panel("context", "CURSIVIS  /  FINDING ACTIONS", selection.excerpt)
       const ranked = await this.bridge.request<{actions: string[]}>("/suggest", {revision: selection.revision})
       if (epoch === this.epoch && this.selection === selection && !this.pending) this.suggestions(selection, ranked.actions)
     } catch (error) {
-      if (epoch === this.epoch && !this.selection) this.panel("context", "CURSIVIS", String(error))
+      if (epoch === this.epoch) {
+        this.panel("context", "CURSIVIS", String(error))
+        this.button(this.controls, "Retry", 0, -11, 12, () => this.capture())
+      }
     }
   }
 
   private suggestions(selection: Selection, actions: string[]): void {
     this.panel("context", "CURSIVIS  /  " + selection.characters + " CHARS", selection.excerpt)
-    actions.filter(action => ACTIONS.includes(action)).slice(0, 3).forEach((action, index) => {
-      const name = action[0].toUpperCase() + action.slice(1)
-      this.button(this.controls, name, (index - 1) * 16, -10.5, 14, () => this.analyze(action))
+    this.message.layoutRect = Rect.create(-24.5, 24.5, -5, 5)
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(0, 5.5, 0.24))
+    actions.forEach((action, index) => {
+      const name = action[0].toUpperCase() + action.slice(1).replace(/_/g, " ")
+      this.button(this.controls, name, 0, -2 - index * 5.4, 30, () => this.analyze(action))
     })
   }
 
@@ -343,7 +384,7 @@ export class Spatial extends BaseScriptComponent {
     this.stopListening()
     this.inputMode = input
     this.panel("jarvis", "JARVIS  /  REVIEW", "Pinch Send when your command is ready.")
-    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(0, -4, 0.24))
+    this.message.getSceneObject().getTransform().setLocalPosition(new vec3(14, -4, 0.24))
     this.entry.text = text
     this.entry.getSceneObject().enabled = true
     this.button(this.controls, "Send", 0, -10, 12, () => this.send())
@@ -362,6 +403,7 @@ export class Spatial extends BaseScriptComponent {
       if (epoch === this.epoch) {
         this.voice = "sent"
         this.panel("jarvis", "JARVIS  /  SENT", response.message)
+        this.button(this.controls, "Talk again", 0, -10, 18, () => this.listen())
       }
     } catch (error) {
       if (epoch === this.epoch) this.panel("jarvis", "JARVIS", String(error))
