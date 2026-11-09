@@ -17,6 +17,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import error as url_error, request
@@ -72,6 +73,21 @@ def local_request(port, path, data=None, headers=None, timeout=20):
     opener = request.build_opener(NoRedirect, request.ProxyHandler({}))
     with opener.open(request.Request(endpoint, data=body, headers=head), timeout=timeout) as response:
         return response.read(2 * 1024 * 1024)
+
+
+def retry_delay(error, backoff):
+    value = error.headers.get("Retry-After") if error.headers else None
+    if not value:
+        return backoff
+    if value.isascii() and value.isdigit():
+        return max(backoff, float(value))
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(backoff, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, OverflowError):
+        return backoff
 
 
 def clipboard_text():
@@ -202,15 +218,7 @@ class Spatial:
             data["actionHint"] = action
         try:
             path = "/suggest-actions" if suggestions else "/analyze"
-            try:
-                raw = local_request(self.options.cursivis_port, path, data, timeout=65)
-            except url_error.HTTPError as error:
-                if error.code != 503 or error.headers and error.headers.get("Retry-After"):
-                    raise
-                error.close()
-                time.sleep(1)
-                raw = local_request(self.options.cursivis_port, path, data, timeout=65)
-            result = json.loads(raw)
+            result = self.request_context(path, data, current)
         except url_error.HTTPError as error:
             if error.code in (429, 503):
                 raise BridgeError("Cursivis provider is busy. Try the action again shortly.", 503) from error
@@ -238,6 +246,28 @@ class Spatial:
         if not isinstance(answer, str) or not answer.strip():
             raise BridgeError("Cursivis returned an empty result.", 502)
         return {"result": answer[:4000], "action": result.get("action", action), "model": result.get("model", "")}
+
+    def request_context(self, path, data, snapshot):
+        deadline = time.monotonic() + 65
+        for backoff in (2, 4, 8, None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BridgeError("Cursivis provider is busy. Try the action again shortly.", 503)
+            try:
+                raw = local_request(self.options.cursivis_port, path, data, timeout=remaining)
+                return json.loads(raw)
+            except url_error.HTTPError as error:
+                error.close()
+                if error.code not in (429, 503) or backoff is None:
+                    raise
+                delay = retry_delay(error, backoff)
+                # Leave time for the next attempt and respect longer provider cooldowns.
+                if time.monotonic() + delay + 5 >= min(deadline, snapshot.expires):
+                    raise
+            time.sleep(delay)
+            with self.lock:
+                if self.snapshot is not snapshot or snapshot.expires <= time.monotonic():
+                    raise BridgeError("Capture the selection again.", 409)
 
     def jarvis(self, payload):
         if not self.options.jarvis:

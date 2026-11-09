@@ -82,6 +82,43 @@ class CompanionTests(unittest.TestCase):
                     self.app.context({**selection, "action": recommended}, suggestions=False)
                 self.assertEqual(upstream.call_args.args[2]["actionHint"], recommended)
 
+    def test_chosen_action_retries_busy_responses_with_the_same_request(self):
+        with patch("spatial.clipboard_text", return_value="A valve opens when soil dries."):
+            selection = self.app.read_selection()
+        with patch("spatial.local_request", return_value=b'{"recommendedAction":"summarize"}'):
+            self.app.context(selection, suggestions=True)
+
+        responses = [
+            HTTPError("http://localhost", 503, "busy", {"Retry-After": "3"}, None),
+            HTTPError("http://localhost", 429, "throttled", {}, None),
+            b'{"result":"Dry soil opens the valve."}',
+        ]
+        with patch("spatial.local_request", side_effect=responses) as upstream, patch("spatial.time.sleep") as sleep:
+            result = self.app.context({**selection, "action": "summarize"}, suggestions=False)
+        self.assertEqual(result["result"], "Dry soil opens the valve.")
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [3, 4])
+        requests = [call.args[1:] for call in upstream.call_args_list]
+        self.assertEqual(requests, [requests[0]] * 3)
+        self.assertEqual(requests[0][0], "/analyze")
+        self.assertEqual(requests[0][1]["actionHint"], "summarize")
+
+    def test_provider_cooldown_and_cleared_selection_stop_retries(self):
+        with patch("spatial.clipboard_text", return_value="Selected text."):
+            selection = self.app.read_selection()
+        busy = HTTPError("http://localhost", 429, "throttled", {"Retry-After": "120"}, None)
+        with patch("spatial.local_request", side_effect=busy) as upstream, patch("spatial.time.sleep") as sleep:
+            with self.assertRaisesRegex(BridgeError, "provider is busy"):
+                self.app.context(selection, suggestions=True)
+        upstream.assert_called_once()
+        sleep.assert_not_called()
+
+        busy = HTTPError("http://localhost", 503, "busy", {}, None)
+        with patch("spatial.local_request", side_effect=busy) as upstream, \
+                patch("spatial.time.sleep", side_effect=lambda delay: setattr(self.app, "snapshot", None)):
+            with self.assertRaisesRegex(BridgeError, "Capture the selection again"):
+                self.app.context(selection, suggestions=True)
+        upstream.assert_called_once()
+
     def test_unchanged_clipboard_uses_region_from_the_exact_displayed_frame(self):
         self.clipboard_sequence.return_value = 10
         with patch("spatial.clipboard_text") as read_text:
