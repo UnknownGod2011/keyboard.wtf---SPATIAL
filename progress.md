@@ -30,6 +30,7 @@ The repeated Cursivis run produced ranked actions, then received HTTP 503 from t
 - `dc6e082` pushed the official SPECS template, the MCP-created workspace and material, Lens scripts, Windows companion, tests and submission documents to `main`.
 - `bridge/demo_document.py` supplies a safe, selectable Windows fixture for the recording.
 - `1145701` adds the synthetic Windows fixture and provider busy/retry handling.
+- `c96cb98` was compiled and rendered in the editor. The local evidence image `.artifacts/spatial-preview.png` shows the unpaired workspace with its full control labels. It also shows an uneven frame render across the Preview, which still needs visual QA.
 - Enable the local Preview transport permission, then test authenticated texture rendering and actual pinch input. Capture a clip after confirming the complete visible workflow.
 
 Submission readiness is pending. There is no recorded demo or verified Lens workflow yet.
