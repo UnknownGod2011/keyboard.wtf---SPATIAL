@@ -17,6 +17,12 @@ git lfs install
 git clone https://github.com/UnknownGod2011/keyboard.wtf---SPATIAL.git
 Set-Location keyboard.wtf---SPATIAL
 git lfs pull
+PowerShell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-Spatial.ps1
+```
+
+The launcher creates the local Python environment, installs the bridge dependency when needed, opens the project if Lens Studio is closed, and runs the bridge in the terminal. Use `-Context` and `-Jarvis` after configuring the respective companion apps below. The execution-policy option applies only to this PowerShell process. To set up and start the bridge manually instead, run these commands from the cloned folder:
+
+```powershell
 py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r bridge\requirements.txt
 .\.venv\Scripts\python.exe bridge\spatial.py --desktop

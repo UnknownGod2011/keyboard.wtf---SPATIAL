@@ -6,7 +6,7 @@
 
 **Deadline** — 10 November 2026, 3:30 a.m. IST
 
-**Video** — pending recorded Preview verification and public YouTube upload
+**Submission status** — The owner reported submitting the demo video and project on Devpost. The video link is in the submitted entry.
 
 ## Description draft
 

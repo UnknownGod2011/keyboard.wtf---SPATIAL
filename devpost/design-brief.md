@@ -6,6 +6,8 @@ status: approved
 
 The project owner's mission brief supplies the product and interaction requirements and delegates implementation decisions. This brief uses the Devpost Learn plan-lens template.
 
+This brief records the original design. The [implementation and validation record](implementation.md) explains how the submitted build evolved, how to reproduce it, and which checks still need hardware or account access.
+
 ## The one spatial moment
 
 While working on Windows, the wearer sees the active document at their desk and pinches Cursivis beside it. A real explanation appears alongside the source material, in the same physical place, while Jarvis remains within reach for the next action.
