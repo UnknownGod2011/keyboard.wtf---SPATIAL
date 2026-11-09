@@ -72,9 +72,9 @@ export class Spatial extends BaseScriptComponent {
     this.frame.padding = new vec2(1, 1)
     this.frame.setUseFollow(false)
     this.host = this.object("Spatial UI", this.frame.contentTransform.getSceneObject(), 0, 0, 0.6)
-    this.label("KEYBOARD.WTF  /  SPATIAL", -13, 18.3, 30, 3, 49, CYAN)
-    this.indicator = this.label("PC • OFFLINE", 20, 18.3, 13, 3, 36, INK)
-    this.title = this.label("DESKTOP", 0, 12.7, 52, 3, 46, CYAN)
+    this.label("KEYBOARD.WTF  /  SPATIAL", -11, 18.3, 33, 3, 74, CYAN)
+    this.indicator = this.label("PC • OFFLINE", 20, 18.3, 15, 3, 58, INK)
+    this.title = this.label("DESKTOP", 0, 12.7, 52, 3, 73, CYAN)
     this.screen = this.object("Live Windows Image", this.host, 0, 0, 0.2)
     if (DISPLAY_MATERIAL) {
       const material = DISPLAY_MATERIAL.clone()
@@ -85,7 +85,7 @@ export class Spatial extends BaseScriptComponent {
       this.display.addMaterial(material)
     }
     this.screen.enabled = false
-    this.message = this.label("", 0, 0, 49, 18, 42, INK)
+    this.message = this.label("", 0, 0, 49, 18, 64, INK)
     this.controls = this.object("Workflow controls", this.host, 0, 0, 0.25)
     this.entry = this.object("Jarvis transcript", this.host, 0, 2, 0.25)
       .createComponent(TextInputField.getTypeName()) as TextInputField
@@ -131,15 +131,18 @@ export class Spatial extends BaseScriptComponent {
     handler: () => void, round = false,
   ): SceneObject {
     const node = this.object(name, parent, x, y, 0.05)
-    const button = round
-      ? node.createComponent(RoundButton.getTypeName()) as RoundButton
-      : node.createComponent(Button.getTypeName()) as Button
-    button.size = new vec3(width, round ? width : 4.5, 1)
-    button.onTriggerUp.add(handler)
+    if (round) {
+      const button = node.createComponent(RoundButton.getTypeName()) as RoundButton
+      button.width = width
+      button.onTriggerUp.add(handler)
+    } else {
+      const button = node.createComponent(Button.getTypeName()) as Button
+      button.size = new vec3(width, 5, 1)
+      button.onTriggerUp.add(handler)
+    }
     const content = node.createComponent(ElementContent.getTypeName()) as ElementContent
     content.text = name
-    content.textSize = 35
-    content.autoResize = true
+    content.textSize = 54
     return node
   }
 

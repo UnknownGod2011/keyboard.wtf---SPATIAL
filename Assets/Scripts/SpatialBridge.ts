@@ -21,15 +21,19 @@ export class SpatialBridge {
 
   async request<T>(path: string, body?: object): Promise<T> {
     if (!this.token) throw new Error("Set the local pairing token in the Spatial component.")
-    const headers = {Authorization: "Bearer " + this.token, "Content-Type": "application/json"}
-    const request = new Request(this.endpoint + path, {
-      method: body ? "POST" : "GET",
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-      redirect: "error",
-    })
+    const headers = {Authorization: "Bearer " + this.token}
+    const options = body
+      ? {method: "POST", headers: {...headers, "Content-Type": "application/json"}, body: JSON.stringify(body), redirect: "error"}
+      : {method: "GET", headers, redirect: "error"}
+    const request = new Request(this.endpoint + path, options)
     const response = await this.internet.fetch(request)
-    const data = await response.json()
+    const text = await response.text()
+    let data: {error?: string}
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw new Error("Companion HTTP " + response.status + " returned an unreadable response.")
+    }
     if (response.status !== 200) throw new Error(data.error || "Companion HTTP " + response.status)
     return data as T
   }

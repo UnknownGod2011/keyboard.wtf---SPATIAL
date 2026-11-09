@@ -28,7 +28,8 @@
   ExportUid: 00000000-0000-0000-0000-000000000000
   PackagePolicy: CanBeUnpacked
   ScriptInputsHidden:
-    {}
+    endpoint: false
+    pairingToken: false
   ScriptTypesHidden:
     {}
   ReadMe: !<reference> 00000000-0000-0000-0000-000000000000
@@ -38,10 +39,11 @@
   Attachments:
     []
   DefaultScriptInputs:
-    -
-      {}
+    - endpoint: "http://127.0.0.1:48790"
+      pairingToken: ""
   ScriptTypes:
     -
       {}
   InputLines:
-    []
+    - '// @input string endpoint = "http://127.0.0.1:48790" {"hint":"Loopback Windows companion address. HTTP is for Preview development."}'
+    - '// @input string pairingToken {"hint":"Session credential from bridge.local.json. Use only in a local project copy."}'
